@@ -1,0 +1,74 @@
+name: Access Control
+
+on:
+  issues:
+    types:
+      - opened
+      - edited
+
+jobs:
+  access_control:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for Approval Label
+        id: check_approval
+        uses: actions/github-script@v5
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const labels = issue.labels.map(label => label.name);
+            const approvalLabel = 'Approval Needed';
+            const isApproved = labels.includes(approvalLabel);
+            console.log(`Is the request approved? ${isApproved}`);
+            return isApproved;
+
+      - name: Request Product Owner Approval
+        if: steps.check_approval.outputs.result == 'true'
+        uses: actions/github-script@v5
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const productOwnersTeam = 'Product Owners'; // Change this to the actual team name
+            const reviewers = await github.teams.listMembersInOrg({
+              org: context.repo.owner,
+              team_slug: productOwnersTeam,
+            });
+            const reviewersList = reviewers.data.map(member => member.login);
+            console.log(`Requesting approval from Product Owners: ${reviewersList.join(', ')}`);
+            // Add a comment on the issue requesting approval
+            await github.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `@${reviewersList.join(', ')} Please approve access for ${issue.user.login}.`,
+            });
+
+      - name: Check for Approved Comments
+        if: steps.check_approval.outputs.result == 'true'
+        uses: actions/github-script@v5
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const comments = await github.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+            });
+            const approvalComment = comments.data.find(comment => comment.body.includes('Please approve access for'));
+            const isApproved = !!approvalComment;
+            console.log(`Are there approved comments? ${isApproved}`);
+            return isApproved;
+
+      - name: Add to Authorized Team
+        if: steps.check_approval.outputs.result == 'true' && steps.check_for_approved_comments.outputs.result == 'true'
+        uses: actions/github-script@v5
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const developersTeam = 'Developers'; // Change this to the actual team name
+            await github.teams.addOrUpdateMembershipInOrg({
+              org: context.repo.owner,
+              team_slug: developersTeam,
+              username: issue.user.login,
+              role: 'member', // Change this if you want a different role
+            });
